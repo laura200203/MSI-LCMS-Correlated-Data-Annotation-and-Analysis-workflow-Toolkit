@@ -1,0 +1,300 @@
+#================1. Cancer ROI data import,, extract and orgnize=======================
+import pandas as pd
+import numpy as np
+
+# File paths
+ROI_file_path = r".csv" # export file from  matlab ROI selecting function
+concentration_file_path = r"" # tsv file containing LC-MS intensity, MSI intensity, compound name
+
+# Step 1: Import and process ROI_df (ensure column names are m/z values)
+with open(ROI_file_path, 'r') as f:
+    first_line = f.readline().strip()
+mz_columns = first_line.split(',')
+
+ROI_df = pd.read_csv(ROI_file_path, sep=',', skiprows=1, header=None)
+ROI_df.columns = mz_columns
+
+roi_columns_float = [float(col) for col in ROI_df.columns]
+col_mapping = {float_col: str_col for float_col, str_col in zip(roi_columns_float, ROI_df.columns)}
+
+# Step 2: Import con_df and extract ROI_df_e
+con_df = pd.read_csv(concentration_file_path, sep='\t')
+
+ROI_df_e = pd.DataFrame()
+matched_info = []
+
+for idx, row in con_df.iterrows():
+    target_mz = row["observed_mz"]
+    closest_float = min(roi_columns_float, key=lambda x: abs(x - target_mz))
+    closest_col = col_mapping[closest_float]
+    
+    ROI_df_e[closest_col] = ROI_df[closest_col]
+    matched_info.append({
+        "observed_mz": target_mz,
+        "matched_mz": closest_float,
+        "column_name": closest_col
+    })
+
+# Step 3: Calculate for each row in con_df
+results = []
+
+for idx, row in con_df.iterrows():
+    con_lcms = row["LC-MS_concentration"]
+    con_msi = row["MSI_intensity"]
+    
+    target_mz = row["observed_mz"]
+    closest_float = min(roi_columns_float, key=lambda x: abs(x - target_mz))
+    closest_col = col_mapping[closest_float]
+    
+    target_column = ROI_df_e[closest_col]
+    c_pixel = target_column.count()
+    c_msi = target_column.sum()
+    
+    results.append({
+        "observed_mz": target_mz,
+        "con_lcms": con_lcms,
+        "con_msi": con_msi,
+        "c_pixel": c_pixel,
+        "c_msi": c_msi
+    })
+
+# Convert to DataFrame
+result_df = pd.DataFrame(results)
+
+# Step 4: Calculate c_lcms_p
+result_df["c_lcms_p"] = (result_df["con_lcms"] / result_df["c_pixel"]) * (result_df["c_msi"] / result_df["con_msi"])
+
+# Handle division by zero (replace inf/NaN with empty)
+result_df["c_lcms_p"] = result_df["c_lcms_p"].replace([np.inf, -np.inf], np.nan)
+
+# Step 5: Merge first few columns of con_df to result_df
+con_df_columns_to_keep = con_df.columns[:3].tolist()
+c_result_df = pd.concat([con_df[con_df_columns_to_keep], result_df], axis=1)
+
+# Output results
+print("\nFinal result c_result_df:")
+print(result_df.head())
+
+# Optional: Save to file
+c_result_df.to_csv("correlation_results.csv", index=False)
+
+#=====================2. 1. Healthy ROI data import,, extract and orgnize=====================
+import pandas as pd
+import numpy as np
+
+# File paths
+ROI_file_path = r"" #  export file from  matlab ROI selecting function
+concentration_file_path = r"correlation_concentration.tsv"
+
+# Step 1: Import and process ROI_df (ensure column names are m/z values)
+with open(ROI_file_path, 'r') as f:
+    first_line = f.readline().strip()
+mz_columns = first_line.split(',')
+
+# Read data (skip the first row)
+ROI_df = pd.read_csv(ROI_file_path, sep=',', skiprows=1, header=None)
+ROI_df.columns = mz_columns
+
+# Convert column names to float for matching
+roi_columns_float = [float(col) for col in ROI_df.columns]
+col_mapping = {float_col: str_col for float_col, str_col in zip(roi_columns_float, ROI_df.columns)}
+
+# Step 2: Import con_df and extract ROI_df_e
+con_df = pd.read_csv(concentration_file_path, sep='\t')
+
+# Initialize ROI_df_e and matching info
+ROI_df_e = pd.DataFrame()
+matched_info = []
+
+for idx, row in con_df.iterrows():
+    target_mz = row["observed_mz"] 
+    
+    # Find closest column
+    closest_float = min(roi_columns_float, key=lambda x: abs(x - target_mz))
+    closest_col = col_mapping[closest_float]
+    
+    # Extract column into ROI_df_e
+    ROI_df_e[closest_col] = ROI_df[closest_col]
+    
+    # Record matching info (optional)
+    matched_info.append({
+        "observed_mz": target_mz,
+        "matched_mz": closest_float,
+        "column_name": closest_col
+    })
+
+# Step 3: Perform calculations for each row in con_df
+results = []
+
+for idx, row in con_df.iterrows():
+    con_lcms = row["LC-MS_concentration"]  
+    con_msi = row["MSI_intensity"]        
+    
+    # Find corresponding column in ROI_df_e
+    target_mz = row["observed_mz"]
+    closest_float = min(roi_columns_float, key=lambda x: abs(x - target_mz))
+    closest_col = col_mapping[closest_float]
+    
+    # Calculate h_pixel (non-null count) and h_msi (sum)
+    target_column = ROI_df_e[closest_col]
+    h_pixel = target_column.count()        
+    h_msi = target_column.sum()            
+    
+    # Save result
+    results.append({
+        "observed_mz": target_mz,
+        "con_lcms": con_lcms,
+        "con_msi": con_msi,
+        "h_pixel": h_pixel,
+        "h_msi": h_msi
+    })
+
+# Convert to DataFrame
+h_result_df = pd.DataFrame(results)
+
+# Step 4: Calculate h_lcms_p
+h_result_df["h_lcms_p"] = (h_result_df["con_lcms"] / h_result_df["h_pixel"]) * (h_result_df["h_msi"] / h_result_df["con_msi"])
+
+# Handle division by zero (replace inf/NaN with NaN)
+h_result_df["h_lcms_p"] = h_result_df["h_lcms_p"].replace([np.inf, -np.inf], np.nan)
+
+# Step 5: Merge relevant columns from con_df into h_result_df
+con_df_columns_to_keep = con_df.columns[:3].tolist()  
+h_result_df = pd.concat([con_df[con_df_columns_to_keep], h_result_df], axis=1)
+
+# Output result
+print("\nFinal result (h_result_df):")
+print(h_result_df.head())
+
+# Optionally, save to file
+h_result_df.to_csv("h_correlation_results.csv", index=False)
+
+#========================Integration of two ROI==========================
+c_subset = c_result_df[["Name", "observed_mz", "c_lcms_p", "c_pixel"]]
+h_subset = h_result_df[["Name", "observed_mz", "h_lcms_p", "h_pixel"]]
+
+merged_df = pd.merge(
+    c_subset,
+    h_subset,
+    on=["Name", "observed_mz"],
+    how="inner",
+    suffixes=('', '_drop')
+)
+
+
+merged_df["c_lcms_p"] = merged_df["c_lcms_p"] * 5
+merged_df["h_lcms_p"] = merged_df["h_lcms_p"] * 5
+
+merged_df = merged_df[["Name", "observed_mz", "c_pixel", "h_pixel", "c_lcms_p", "h_lcms_p"]]
+
+print("Merged DataFrame (with pixel columns and scaled lcms_p):")
+print(merged_df.head())
+
+merged_df.to_csv(r"C:\Users\laura\OneDrive - Imperial College London\Write up\result folder\Correlation analysis\merged_results_with_pixels_and_scaled.csv", index=False)
+
+#======= 6. ploting funciton generation====================
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# ======================
+# 数据准备
+# ======================
+# 合并数据并转换长格式
+#combined_df = pd.concat([C_ROI_df_e, H_ROI_df_e])
+melt_df = pd.melt(
+    combined_df,
+    id_vars=['Group'],
+    value_vars=mz_columns,
+    var_name='m/z',
+    value_name='Intensity'
+)
+
+melt_df['Metabolite'] = melt_df['m/z'].map(mz_name_mapping)
+
+significant_metabolites = stats_df.sort_values('FDR').head(20)['Metabolite'].tolist()
+plot_df = melt_df[melt_df['Metabolite'].isin(significant_metabolites)]
+
+plt.figure(figsize=(20, 10))
+sns.boxplot(
+    x='Metabolite',
+    y='Log_Intensity',
+    hue='Group',
+    data=plot_df,
+    palette={'Cancer': '#d62728', 'Healthy': '#1f77b4'},
+    showfliers=False,  
+    width=0.7
+)
+
+sns.stripplot(
+    x='Metabolite',
+    y='Log_Intensity',
+    hue='Group',
+    data=plot_df,
+    palette={'Cancer': '#8b0000', 'Healthy': '#00008b'},
+    dodge=True,
+    jitter=0.2,
+    alpha=0.2,
+    size=3,
+    edgecolor='gray'
+)
+
+for i, metab in enumerate(significant_metabolites):
+    fdr = stats_df[stats_df['Metabolite'] == metab]['FDR'].values[0]
+    if fdr < 1e-10:
+        plt.text(
+            i, 
+            plot_df['Log_Intensity'].max() * 1.1, 
+            '****\nFDR={:.1e}'.format(fdr),
+            ha='center',
+            color='#2ca02c',
+            fontsize=10
+        )
+
+plt.title('Distribution of Metabolites (N>1000 Samples)', fontsize=16)
+plt.xlabel('Metabolite', fontsize=14)
+plt.ylabel('Log10 Concentration(μg/(pixel*mL)))', fontsize=14)
+plt.xticks(rotation=45, ha='right')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.savefig('boxplot.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+#=======================6. statistic table generation.=======================
+import pandas as pd
+import numpy as np
+from scipy.stats import ttest_ind
+from statsmodels.stats.multitest import multipletests
+
+results = []
+
+for mz_col in mz_columns:
+    cancer_data = C_ROI_df_e[mz_col].dropna()
+    healthy_data = H_ROI_df_e[mz_col].dropna()
+
+    fc = cancer_data.mean() / healthy_data.mean()
+    log2_fc = np.log2(fc)
+    
+    t_stat, p_val = ttest_ind(cancer_data, healthy_data, equal_var=False)
+    
+    results.append({
+        'm/z': mz_col,
+        'Metabolite': mz_name_mapping.get(mz_col, 'Unknown'),
+        'Mean_Cancer': cancer_data.mean(),
+        'Mean_Healthy': healthy_data.mean(),
+        'log2(FC)': log2_fc,
+        'P_value': p_val
+    })
+
+stats_df = pd.DataFrame(results)
+
+rejected, pvals_corrected, _, _ = multipletests(
+    stats_df['P_value'], 
+    alpha=0.05, 
+    method='fdr_bh'
+)
+stats_df['FDR'] = pvals_corrected
+
+pd.options.display.float_format = '{:.2e}'.format
+
+display(stats_df)
