@@ -1,0 +1,290 @@
+import pandas as pd
+import numpy as np
+from itertools import combinations
+import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy.stats import linregress
+
+"""
+Pipeline Usage Guide
+
+This script processes amino acid data by reading, normalizing, calculating ratios, and visualizing results.
+
+Functions:
+1. read_data(file_path): Reads the input file.
+2. normalize_data(df, exclude=[]): Normalizes LC-MS and MSI data.
+3. calculate_ratios(df): Computes ratios between pairs of amino acids.
+4. compare_values(df, output_file_path): Exports normalized values.
+5. plot_results(result_df, output_file): Visualizes LC-MS and MSI ratio comparison.
+6. plot_individual(result_df): Visualizes individual LC-MS and MSI correlation.
+7. pipeline(input_file, output_file, exclude=[], pairing=True): Main pipeline function.
+
+Usage:
+- Adjust input_file and output_file paths.
+- Use 'exclude' to filter out specific amino acids.
+- Set 'pairing' to True for pairwise ratio analysis or False for individual analysis.
+
+Example:
+input_file = r"path/to/input.tsv"
+output_file = r"path/to/output.tsv"
+pipeline(input_file, output_file, exclude=['Arginine'], pairing=True)
+"""
+
+def read_data(file_path):
+    return pd.read_csv(file_path, sep=r'\s+')
+
+def normalize_data(df, exclude=[]):
+    df = df[~df['Name'].isin(exclude)]
+    for col in ['LC-MS_concentration', 'MSI_intensity']:
+        tmp_log = df[col][df[col] != 0]
+        logOS = np.nanmedian(tmp_log)
+        df[f'{col}_normalized'] = np.log(df[col] + logOS)
+    df = df.applymap(lambda x: round(x, 6) if isinstance(x, (int, float)) else x)
+    return df
+
+def calculate_ratios(df):
+    amino_acids = df['Name'].tolist()
+    lcms_concentration = df['LC-MS_concentration_normalized'].tolist()
+    msi_intensity = df['MSI_intensity_normalized'].tolist()
+
+    pairs = list(combinations(amino_acids, 2))
+    ratios = []
+
+    for pair in pairs:
+        idx1 = amino_acids.index(pair[0])
+        idx2 = amino_acids.index(pair[1])
+
+        ratio_lcms = round(lcms_concentration[idx1] / lcms_concentration[idx2], 4)
+        ratio_msi = round(msi_intensity[idx1] / msi_intensity[idx2], 4)
+
+        ratios.append([f"{pair[0]}/{pair[1]}", ratio_lcms, ratio_msi])
+
+    return pd.DataFrame(ratios, columns=["Pair", "Ratio LC-MS", "Ratio MSI"])
+
+def compare_values(df, output_file_path):
+    values = []
+    for idx, row in df.iterrows():
+        lcms_val = row['LC-MS_concentration_normalized']
+        msi_val = row['MSI_intensity_normalized']
+        values.append([row['Name'], lcms_val, msi_val])
+
+    result_df = pd.DataFrame(values, columns=["Name", "LC-MS", "MSI"])
+    result_df.to_csv(output_file_path, index=False)
+    return result_df
+
+def plot_results(result_df, output_file):
+    plt.figure(figsize=(12, 5))
+    sns.set(style="white", context="notebook", font_scale=1.2)
+
+    slope, intercept, r_value, _, _ = linregress(result_df["Ratio LC-MS"], result_df["Ratio MSI"])
+    r_squared = r_value ** 2
+
+    result_df["Predicted"] = slope * result_df["Ratio LC-MS"] + intercept
+    result_df["Percentage Error"] = ((result_df["Ratio MSI"] - result_df["Predicted"]).abs() / result_df["Predicted"].abs() * 100).round(1)
+
+    result_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    valid_errors = result_df["Percentage Error"].dropna()
+
+    mean_error = valid_errors.mean() if not valid_errors.empty else 0
+    result_df["Percentage Error"].fillna(mean_error, inplace=True)
+
+    norm = plt.Normalize(valid_errors.min(), valid_errors.max())
+    sns.scatterplot(x="Ratio LC-MS", y="Ratio MSI", hue="Percentage Error", data=result_df, palette="viridis", hue_norm=norm, s=80, edgecolor="k", linewidth=0.7)
+
+    sns.lineplot(x=result_df["Ratio LC-MS"], y=result_df["Predicted"], color='#ff7f0e', linewidth=3, linestyle='--', label=f'Regression Line\nR² = {r_squared:.2f}')
+    plt.legend(fontsize=11)
+
+    plt.title("LC-MS vs MSI Amino Acid Pair Ratios", pad=20, fontsize=16)
+    plt.xlabel("LC-MS Concentration Ratio (log normalized)", fontsize=12)
+    plt.ylabel("MSI Intensity Ratio (log normalized)", fontsize=12)
+
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.show()
+
+def plot_individual(result_df):
+    plt.figure(figsize=(8, 3))
+    sns.set(style="whitegrid", palette="muted", font_scale=1.2)
+
+    ax = sns.regplot(
+        x="LC-MS", 
+        y="MSI", 
+        data=result_df,
+        scatter_kws={'s': 45, 'alpha': 0.7, 'color': '#2c7bb6'},
+        ci=None
+    )
+
+    slope, intercept, r_value, _, _ = linregress(result_df["LC-MS"], result_df["MSI"])
+    r_squared = r_value ** 2
+    equation = f'y = {slope:.2f}x + {intercept:.2f}\nR² = {r_squared:.3f}'
+
+    plt.text(0.05, 0.95, equation, 
+             transform=ax.transAxes,
+             fontsize=12,
+             verticalalignment='top',
+             bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    plt.title("Correlation between LC-MS and MSI Measurements", pad=15, fontsize=14)
+    plt.xlabel("Normalized LC-MS Concentration (log)", labelpad=10)
+    plt.ylabel("Normalized MSI Intensity (log)", labelpad=10)
+
+    plt.savefig('LCMS_vs_MSI_Correlation.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def pipeline(input_file, output_file, exclude=[], pairing=True):
+    df = read_data(input_file)
+    df = normalize_data(df, exclude)
+    if pairing:
+        result_df = calculate_ratios(df)
+        plot_results(result_df, output_file)
+    else:
+        result_df = compare_values(df, output_file)
+        plot_individual(result_df)
+
+input_file = r"C:\\Users\\laura\\OneDrive - Imperial College London\\Write up\\result folder\\comparison\\comparison\\correct mass comparison analysis amine.tsv"
+output_file = r"C:\\Users\\laura\\OneDrive - Imperial College London\\Write up\\result folder\\comparison\\comparison\\correct mass comparison-output.tsv"
+pipeline(input_file, output_file, exclude=[], pairing=True)
+
+#==================interactive comparison result ===========================
+# normalized, not pairing, with percentage error and regression equation
+
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from scipy.stats import linregress
+
+def MFC(df, exclude=[]):
+    """Perform data normalization"""
+    df = df[~df['Name'].isin(exclude)]  # Exclude specified amino acids
+    
+    for col in ['LC-MS_concentration', 'MSI_intensity']:
+        # Handle all-zero columns
+        tmp_log = df[col][df[col] != 0]
+        logOS = np.nanmedian(tmp_log) if not tmp_log.empty else 0
+        
+        # Perform normalization
+        df[f'{col}_normalized'] = np.log(df[col] + logOS)
+    
+    # Round numeric values
+    df = df.round(6)
+    print("\n=== Normalized Data ===")
+    print(df)
+    return df
+
+def compare_values(df, output_file_path):
+    """Extract normalized values"""
+    values = []
+    for _, row in df.iterrows():
+        values.append([
+            row['Name'],
+            row['LC-MS_concentration_normalized'],
+            row['MSI_intensity_normalized']
+        ])
+    
+    result_df = pd.DataFrame(values, columns=["Name", "LC-MS", "MSI"])
+    print("\n=== Analysis Ready Data ===")
+    print(result_df)
+    result_df.to_csv(output_file_path, index=False)
+    return result_df
+
+def plot_ratios(result_df):
+    """Create visualization with regression analysis"""
+    fig = go.Figure()
+
+    # Calculate regression parameters
+    slope, intercept, r_value, _, _ = linregress(result_df["LC-MS"], result_df["MSI"])
+    r_squared = r_value ** 2
+    equation = f"y = {slope:.4f}x + {intercept:.4f}"
+
+    # Calculate predictions and errors
+    result_df["Predicted MSI"] = slope * result_df["LC-MS"] + intercept
+    result_df["Percentage Error"] = (
+        (result_df["MSI"] - result_df["Predicted MSI"]).abs()
+        / result_df["Predicted MSI"].abs()
+        * 100
+    ).round(2)
+    
+    # Handle infinite values
+    result_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    mean_error = result_df["Percentage Error"].mean()
+    result_df["Percentage Error"] = result_df["Percentage Error"].fillna(mean_error)
+
+    # Print error report
+    print("\n=== Percentage Error Report ===")
+    print(result_df[["Name", "Percentage Error"]].sort_values("Percentage Error"))
+
+    # Create color mapping
+    colors = result_df["Percentage Error"]
+    
+    # Add data points
+    fig.add_trace(go.Scatter(
+        x=result_df["LC-MS"],
+        y=result_df["MSI"],
+        mode='markers',
+        name='Data Points',
+        text=result_df.apply(
+            lambda r: (f"{r['Name']}<br>Actual: {r['MSI']:.2f}<br>"
+                      f"Predicted: {r['Predicted MSI']:.2f}<br>"
+                      f"Error: {r['Percentage Error']:.1f}%"), 
+            axis=1
+        ),
+        marker=dict(
+            color=colors,
+            size=12,
+            colorscale='Viridis',
+            colorbar=dict(title='Error Percentage (%)'),
+            opacity=0.8,
+            cmin=0,
+            cmax=100
+        )
+    ))
+
+    # Add regression line
+    x_range = np.linspace(result_df["LC-MS"].min(), result_df["LC-MS"].max(), 100)
+    y_range = slope * x_range + intercept
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=y_range,
+        mode='lines',
+        name=f'Regression Line<br>{equation}<br>R² = {r_squared:.3f}',
+        line=dict(color='red', width=3)
+    ))
+
+    # Configure layout
+    fig.update_layout(
+        title='LC-MS vs MSI Normalized Values Correlation Analysis',
+        xaxis_title='Normalized LC-MS Concentration (log scale)',
+        yaxis_title='Normalized MSI Intensity (log scale)',
+        hoverlabel=dict(bgcolor='white', font_size=12),
+        legend=dict(
+            x=0.02,
+            y=0.98,
+            bgcolor='rgba(255,255,255,0.9)',
+            font=dict(size=12)
+        ),
+        margin=dict(l=50, r=50, t=80, b=50),
+        width=1000,
+        height=800
+    )
+    
+    # Display plot
+    fig.show()
+
+def process_and_plot(input_file_path, output_file_path, exclude=[]):
+    """Main processing pipeline"""
+    # Read data
+    df = pd.read_csv(input_file_path, sep=r'\s+')
+    
+    # Normalize data
+    df = MFC(df, exclude)
+    
+    # Prepare analysis data
+    result_df = compare_values(df, output_file_path)
+    
+    # Generate visualization
+    plot_ratios(result_df)
+
+# Example execution
+if __name__ == "__main__":
+    input_file = r"C:\Users\laura\OneDrive - Imperial College London\Write up\result folder\comparison\comparison\correct mass comparison analysis amine.tsv"
+    output_file = r"C:\Users\laura\OneDrive - Imperial College London\Write up\result folder\comparison\comparison\correct mass comparison_output.tsv"
+    process_and_plot(input_file, output_file, exclude=[])
