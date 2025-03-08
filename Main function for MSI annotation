@@ -1,0 +1,423 @@
+# ===========1.  MSI data retrieve==============
+import h5py
+import numpy as np
+
+def read_hdf5():
+    file_path = r""  #The file_path of the pretreated hdf5 file
+    with h5py.File(file_path, 'r') as h5:
+        mz_array = np.array(h5.get('mz')).flatten() if 'mz' in h5 else None
+        data = h5.get('datacube') if 'datacube' in h5 else None
+        dims = h5.get('dims') if 'dims' in h5 else None
+        #dims=int(dim[1]), int(dim[0])
+        mean_data = np.mean(data, axis=1) if data is not None else None
+        sum_data = np.sum(data, axis=1) if data is not None else None
+    return mz_array, mean_data, data, file_path,sum_data
+mz_array, mean_data, data, file_path,sum_data = read_hdf5()
+
+# ============2. knowlist data retrieve==============
+import pandas as pd
+file_path = r"C:\Users\laura\OneDrive - Imperial College London\LC-MS\LCMS annotation\LPOS_ROI_V_5_1_2.csv"
+df = pd.read_csv(file_path)
+transition_df = df[['cpdName', 'chemicalFormula', 'Monoisotopic_mass']].copy()
+print(transition_df.head())
+transition_df.to_csv(r"C:\Users\laura\OneDrive - Imperial College London\LC-MS\LCMS annotation\LNeg_filltered.tsv", sep='\t', index=False)
+
+# ============3. match_msi function(core function, find all the match in all adduct type, find isotope pattern )=========
+import pyopenms
+import numpy as np
+import pandas as pd
+
+def match_msi(transition_df, adduct_types, ppm, output=1):
+    # Adductseting
+    adducts = {
+        1: {"mass_shift": -1.007276, "charge": 1},    # [M-H]⁻
+        2: {"mass_shift": 34.968853, "charge": 1},    # [M+Cl]⁻
+        3: {"mass_shift": -15.0325, "charge": 1},     # [M-CH3]⁻
+        4: {"mass_shift": 20.975218, "charge": 1},    # [M+Na-2H]
+        5: {"mass_shift": 36.948606, "charge": 1},    # [M+K-2H]
+        6: {"mass_shift": 45.0084, "charge": 1},    # [M+FA-H]⁻
+        7: {"mass_shift": -19.01839, "charge": 1}     # [M-H2O-H]⁻
+    }
+
+    all_results = []
+    for adduct in adduct_types:
+        if adduct not in adducts:
+            raise ValueError(f"Invalid adduct type. Must be {list(adducts.keys())}")
+        adduct_info = adducts[adduct]
+
+        result_dict = {}
+
+        for _, row in transition_df.iterrows():
+            cpd_name = row['cpdName'].strip('"')  
+            formula = row['chemicalFormula'].strip('"')  
+            mono_mass = row['Monoisotopic_mass']  
+
+            try:
+                emp_formula = pyopenms.EmpiricalFormula(formula)
+                isotope_generator = pyopenms.CoarseIsotopePatternGenerator(max_isotope=4)
+                isotope_pattern = isotope_generator.run(emp_formula)
+                sorted_peaks = sorted(isotope_pattern.getContainer(), key=lambda p: p.getIntensity(), reverse=True)
+            except Exception as e:
+                print(f"Invalid formula: {formula} ({e})")
+                continue
+
+            isotopes = []
+            for isotope_num, peak in enumerate(sorted_peaks[:4]):
+                theo_mz = peak.getMZ()
+                adjusted_mz = (theo_mz + adduct_info["mass_shift"]) / adduct_info["charge"]
+                theo_intensity = peak.getIntensity()
+
+                tolerance = adjusted_mz * ppm / 1e6
+                mask = np.isclose(mz_array, adjusted_mz, atol=tolerance, rtol=0)
+                matched_indices = np.where(mask)[0]
+
+                matches = []
+                for match_index, idx in enumerate(matched_indices, start=1):
+                    matches.append({
+                        "match_index": match_index,
+                        "observed_mz": mz_array[idx],
+                        "intensity": sum_data[idx],
+                        "ppm_error": (mz_array[idx] - adjusted_mz) / adjusted_mz * 1e6
+                    })
+
+                if output == 1 and not matches:
+                    continue
+
+                isotopes.append({
+                    "isotope_number": isotope_num,
+                    "theoretical_mz": theo_mz,
+                    "theoretical_intensity": theo_intensity,
+                    "adjusted_mz": adjusted_mz,
+                    "relative_intensity": peak.getIntensity(),
+                    "matches": matches.copy(),
+                    "monoisotopic_mass": mono_mass
+                })
+
+            if output == 1:
+                valid_match_indexes = set()
+                for iso in isotopes:
+                    if iso["isotope_number"] == 0:
+                        valid_match_indexes.update(m["match_index"] for m in iso["matches"])
+                if not valid_match_indexes:
+                    continue
+                for iso in isotopes:
+                    iso["matches"] = [m for m in iso["matches"] if m["match_index"] in valid_match_indexes]
+
+            if isotopes:
+                result_dict[cpd_name] = {
+                    "formula": formula,
+                    "monoisotopic_mass": mono_mass,
+                    "adduct_info": {"type": adduct, "mass_shift": adduct_info["mass_shift"], "charge": adduct_info["charge"]},
+                    "isotopes": isotopes
+                }
+
+        df_list = []
+        for cpd, data in result_dict.items():
+            for iso in data["isotopes"]:
+                if iso["matches"]:
+                    for match in iso["matches"]:
+                        df_list.append({
+                            "Compound": cpd,
+                            "Formula": data["formula"],
+                            "Adduct": data["adduct_info"]["type"],
+                            "Isotope_Number": iso["isotope_number"],
+                            "Monoisotopic_mass": iso["monoisotopic_mass"],
+                            "Theoretical_mz": iso["theoretical_mz"],
+                            "Theoretical_intensity": iso["theoretical_intensity"],
+                            "Adjusted_mz": iso["adjusted_mz"],
+                            "Observed_mz": match["observed_mz"],
+                            "Intensity": match["intensity"],
+                            "ppm_error": match["ppm_error"],
+                            "Match_Index": match["match_index"]
+                        })
+                elif output == 2:
+                    df_list.append({
+                        "Compound": cpd,
+                        "Formula": data["formula"],
+                        "Adduct": data["adduct_info"]["type"],
+                        "Isotope_Number": iso["isotope_number"],
+                        "Monoisotopic_mass": iso["monoisotopic_mass"],
+                        "Theoretical_mz": iso["theoretical_mz"],
+                        "Theoretical_intensity": iso["theoretical_intensity"],
+                        "Adjusted_mz": iso["adjusted_mz"],
+                        "Observed_mz": None,
+                        "Intensity": None,
+                        "ppm_error": None,
+                        "Match_Index": None
+                    })
+
+        all_results.append(pd.DataFrame(df_list))
+
+    return pd.concat(all_results, ignore_index=True)
+
+# example use
+transition_df.columns = [col.strip().replace(' ', '_') for col in transition_df.columns]
+adduct_types = [1, 2, 3]
+final_result_df = match_msi(transition_df, adduct_types, ppm=25, output=1)
+
+final_result_df.drop(columns=['Compound'], inplace=True)
+final_result_df.drop_duplicates(inplace=True)
+
+output_path = r""#output tsv path
+final_result_df.to_csv(output_path, sep='\t', index=False)
+print(f"\nout put path: {output_path}")
+print(final_result_df.head(20).to_string(index=False))
+
+=================4. ion_xic_plot=============================
+# plot important feature
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import plotly.graph_objects as go
+
+def ion_xic_plot(target_mz, intensity_threshold=1, colormap='magma'):
+    """
+    generate ion image 
+    
+    Parameters:
+        target_mz (float): targeted m/z 
+        intensity_threshold (float, optional): intensity theshold, default= 1
+        colormap (str, optional): color of the image，default= 'magma'
+    """
+    import h5py
+    file_path=r""#pretreated hdf5 datacube
+
+    h5=h5py.File(file_path,'r')
+    data=h5.get('datacube')
+    dims=h5.get('dims')
+    mz=h5.get('mz')
+    
+    idx = np.abs(np.array(mz) - target_mz).argmin()
+    ion_data = data[idx, :] 
+    actual_mz = float(mz[idx])  
+    ppm = abs(target_mz - actual_mz) / target_mz * 1e6  # 计算PPM
+    
+    if dims is not None:
+        ion_image_data = ion_data.copy()
+        if dims.shape == (2, 1):
+            ion_image_data = ion_image_data.reshape(int(dims[1]), int(dims[0]))
+        plt.figure(figsize=(4, 4))
+        plt.imshow(ion_image_data, cmap='inferno', vmin=np.percentile(ion_image_data, 20),  # 设置颜色范围下限
+            vmax=np.percentile(ion_image_data, 99.6))
+        plt.colorbar(label="Intensity")
+        #plt.title(f"searched_mz = {target_mz} ")
+        plt.title(f"Searched_mz = {target_mz} (Closest_mz = {actual_mz:.4f}, PPM: {ppm:.2f})\n\n\n")
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.show()
+
+===========5. ion image printing for all the detection=======================
+import pandas as pd
+
+for index, row in final_result_df.iterrows():
+    formula = row['Formula']
+    isotope_number = row['Isotope_Number']
+    adjusted_mz = row['Adjusted_mz']
+    intensity = row['Intensity']
+
+    print(f"Formula: {formula}, Isotope Number: {isotope_number}, Intensity: {intensity}")
+
+    if 'ion_xic_plot' in globals():  
+        ion_xic_plot(adjusted_mz)
+    else:
+        print("Function 'ion_xic_plot' is not defined.")
+
+===============6. isotope spatical co-localization pattern (2D)=================
+# 2D ploting function
+
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+import h5py
+
+def match_ploting(mz1, mz2):
+    sns.set_style("white")
+    plt.figure(figsize=(8, 6), facecolor='white')
+
+    with h5py.File(r"C:\Users\laura\OneDrive - Imperial College London\MSI\recalibrated data\datacube_f_recalibrated.h5", 'r') as h5:
+        data = h5['datacube'][:]
+        mz = h5['mz'][:].flatten()
+
+    idx_1 = np.abs(mz - mz1).argmin()
+    idx_2 = np.abs(mz - mz2).argmin()
+
+    actual_mz_1 = float(mz[idx_1])
+    actual_mz_2 = float(mz[idx_2])
+    
+    x = data[idx_1, :].flatten()
+    y = data[idx_2, :].flatten()
+
+    mask = (x > 0) & (y > 0) & ~np.isnan(x) & ~np.isnan(y)
+    x_clean = x[mask]
+    y_clean = y[mask]
+
+    df = pd.DataFrame({
+        f'm/z {actual_mz_1:.4f}': x_clean,
+        f'm/z {actual_mz_2:.4f}': y_clean
+    })
+
+    joint_grid = sns.jointplot(
+        data=df,
+        x=df.columns[0],
+        y=df.columns[1],
+        kind="reg",
+        height=6,
+        ratio=5,
+        scatter_kws={'s': 30, 'alpha': 0.8, 'edgecolor': 'k', 'linewidth': 0.5},
+        line_kws={'color': 'black', 'lw': 1.5},
+        marginal_kws={'color': 'none'},
+        space=0
+    )
+
+    joint_grid.ax_joint.set_facecolor('white')
+    joint_grid.ax_marg_x.set_visible(False)
+    joint_grid.ax_marg_y.set_visible(False)
+
+    for ax in [joint_grid.ax_joint]:
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_linewidth(0.5)
+        ax.spines['left'].set_linewidth(0.5)
+    
+    model = LinearRegression()
+    x_reshaped = x_clean.reshape(-1, 1)
+    model.fit(x_reshaped, y_clean)
+    y_pred = model.predict(x_reshaped)
+    
+    slope = model.coef_[0]
+    intercept = model.intercept_
+    r2 = model.score(x_reshaped, y_clean)
+
+    stats_text = (f"y = {slope:.2f}x + {intercept:.2f}\n"
+                 f"R² = {r2:.3f}") 
+    
+    joint_grid.ax_joint.text(
+        x=0.05, y=0.95,
+        s=stats_text,
+        transform=joint_grid.ax_joint.transAxes,
+        fontsize=10,
+        color='black',
+        verticalalignment='top',
+        bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', boxstyle='round,pad=0.3')
+    )
+
+    joint_grid.fig.suptitle(
+        f"Correlation: m/z {actual_mz_1:.4f} vs m/z {actual_mz_2:.4f}",
+        y=1.02,
+        fontsize=12,
+        color='black'
+    )
+
+    plt.show()
+
+    return {
+        "actual_mz_1": actual_mz_1,
+        "actual_mz_2": actual_mz_2,
+        "slope": slope,
+        "intercept": intercept,
+        "r_squared": r2  
+    }
+
+# example use:
+result = match_ploting(100.1, 200.2)
+
+#==========================Spatial co-localization(3D)=====================
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+import h5py
+
+def match_ploting_3d(mz1, mz2, mz3):
+    sns.set_style("white")
+    plt.rcParams['axes.facecolor'] = 'white'
+    
+    with h5py.File(r"C:\Users\laura\OneDrive - Imperial College London\MSI\recalibrated data\datacube_f_recalibrated.h5", 'r') as h5:
+        data = h5['datacube'][:]
+        mz = h5['mz'][:].flatten()
+
+    idx_list = [np.abs(mz - mz_val).argmin() for mz_val in [mz1, mz2, mz3]]
+    actual_mz = [float(mz[idx]) for idx in idx_list]
+
+    x = data[idx_list[0], :].flatten()
+    y = data[idx_list[1], :].flatten()
+    z = data[idx_list[2], :].flatten()
+
+    mask = (x > 0) & (y > 0) & (z > 0) & ~np.isnan(x) & ~np.isnan(y) & ~np.isnan(z)
+    x_clean, y_clean, z_clean = x[mask], y[mask], z[mask]
+
+    fig = plt.figure(figsize=(10, 8), facecolor='white')
+    ax = fig.add_subplot(111, projection='3d')
+
+    sc = ax.scatter(
+        x_clean, y_clean, z_clean,
+        c=z_clean,  
+        cmap='viridis',
+        s=30,
+        alpha=0.7,
+        edgecolor='k',
+        linewidth=0.3
+    )
+
+    cbar = fig.colorbar(sc, ax=ax, pad=0.1)
+    cbar.set_label(f'm/z {actual_mz[2]:.4f} Intensity', rotation=270, labelpad=15)
+
+    X = np.column_stack((x_clean, y_clean))
+    model = LinearRegression().fit(X, z_clean)
+    xx, yy = np.meshgrid(
+        np.linspace(x_clean.min(), x_clean.max(), 20),
+        np.linspace(y_clean.min(), y_clean.max(), 20)
+    )
+    zz = model.intercept_ + model.coef_[0]*xx + model.coef_[1]*yy
+    
+    ax.plot_surface(
+        xx, yy, zz,
+        alpha=0.3,
+        color='gray',
+        edgecolor='none'
+    )
+
+    ax.set_xlabel(f'm/z {actual_mz[0]:.4f}', labelpad=10)
+    ax.set_ylabel(f'm/z {actual_mz[1]:.4f}', labelpad=10)
+    ax.set_zlabel(f'm/z {actual_mz[2]:.4f}', labelpad=10)
+
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.grid(False)
+
+    corr_matrix = np.corrcoef([x_clean, y_clean, z_clean])
+    stats_text = (
+        f"Correlation Matrix:\n"
+        f"X-Y: {corr_matrix[0,1]:.3f}\n"
+        f"X-Z: {corr_matrix[0,2]:.3f}\n"
+        f"Y-Z: {corr_matrix[1,2]:.3f}\n"
+        f"Plane Equation:\n"
+        f"Z = {model.coef_[0]:.2f}X + {model.coef_[1]:.2f}Y + {model.intercept_:.2f}"
+    )
+    
+    ax.text2D(
+        0.05, 0.95,
+        stats_text,
+        transform=ax.transAxes,
+        fontsize=9,
+        bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', boxstyle='round,pad=0.3')
+    )
+
+    ax.view_init(elev=25, azim=-45)  
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return {
+        "actual_mz": actual_mz,
+        "correlation_matrix": corr_matrix,
+        "plane_coefficients": model.coef_.tolist(),
+        "intercept": model.intercept_
+    }
+#example use
+result = match_ploting_3d(100.1, 200.2, 300.3)
