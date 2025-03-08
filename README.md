@@ -15,20 +15,19 @@ This Python-based toolkit is designed for annotation, analysis, and visualizatio
   - Total Ion Chromatograms (TIC)  
 - Interactive capabilities to explore datasets in detail.  
 
-### 2. **Semi-Automated Annotation**
+### 2. **Semi-Automated Annotation toolkit(SAA toolkit)**
 #### **Evidence Considered in Annotation Workflow**:
 - MS matching with customizable ppm tolerance.  
 - Detection of isotope and adduct patterns.  
-- Spatial distribution analysis of ions.  
-- Evidence-based correlation between MSI and LC-MS datasets.  
+- Spatial co-localization.   
 
 #### **Modular Design**:
-- The annotation workflow operates as a complete pipeline or as 8 independent functions.  
-- Facilitates integration of additional algorithms and evidence types.  
+- Achieving semi-auto MSI annotation 
+- Facilitates integration of additional algorithms and evidence types.
+- Modular architecture for easy adaptation to new computational methods.
 
-### 3. **Extensibility and Customization**
-- Modular architecture for easy adaptation to new computational methods.  
-- Open for integration with domain-specific workflows or advanced algorithms.  
+### 3. **Comparison pipeline**
+-   
 
 ### **Development**
 The toolkit is under active development, with new features and functionalities being added to further enhance its capabilities.
