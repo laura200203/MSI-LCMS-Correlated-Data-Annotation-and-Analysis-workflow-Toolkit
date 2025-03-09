@@ -29,5 +29,7 @@ This Python-based toolkit is designed for annotation, analysis, and visualizatio
 ### 3. **Comparison pipeline**
 -   
 
+### 4. **Correlation toolkit**
+
 ### **Development**
 The toolkit is under active development, with new features and functionalities being added to further enhance its capabilities.
