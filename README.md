@@ -27,7 +27,25 @@ This Python-based toolkit is designed for annotation, analysis, and visualizatio
 - Modular architecture for easy adaptation to new computational methods.
 
 ### 3. **Comparison pipeline**
--   
+-This script processes amino acid data by reading, normalizing, calculating ratios, and visualizing results.
+Functions:
+1. read_data(file_path): Reads the input file.
+2. normalize_data(df, exclude=[]): Normalizes LC-MS and MSI data.
+3. calculate_ratios(df): Computes ratios between pairs of amino acids.
+4. compare_values(df, output_file_path): Exports normalized values.
+5. plot_results(result_df, output_file): Visualizes LC-MS and MSI ratio comparison.
+6. plot_individual(result_df): Visualizes individual LC-MS and MSI correlation.
+7. pipeline(input_file, output_file, exclude=[], pairing=True): Main pipeline function.
+
+Usage:
+- Adjust input_file and output_file paths.
+- Use 'exclude' to filter out specific amino acids.
+- Set 'pairing' to True for pairwise ratio analysis or False for individual analysis.
+
+Example:
+input_file = r"path/to/input.tsv"
+output_file = r"path/to/output.tsv"
+pipeline(input_file, output_file, exclude=['Arginine'], pairing=True)   
 
 ### 4. **Correlation toolkit**
 
