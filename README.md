@@ -48,6 +48,27 @@ output_file = r"path/to/output.tsv"
 pipeline(input_file, output_file, exclude=['Arginine'], pairing=True)   
 
 ### 4. **Correlation toolkit**
+1. Cancer ROI Data Processing
+Input: ROI CSV from MATLAB, TSV with LC-MS and MSI data
+Process: Match observed m/z to columns, extract data, calculate per-pixel concentration (c_lcms_p)
+Output: correlation_results.csv
+
+3. Healthy ROI Data Processing
+Input: ROI CSV from MATLAB, TSV with LC-MS and MSI data
+Process: Same as Cancer ROI, calculate per-pixel concentration (h_lcms_p)
+Output: h_correlation_results.csv
+
+3. Data Integration
+Input: correlation_results.csv, h_correlation_results.csv
+Process: Merge on compound name and observed m/z, scale LC-MS data by 5
+Output: merged_results_with_pixels_and_scaled.csv
+
+4. Visualization
+Input: Integrated dataset
+Process: Boxplots for significant metabolites, highlight FDR < 1e-10
+Output: boxplot.png
+Requirements: Python (pandas, numpy, matplotlib, seaborn)
+Usage: Update file paths, run script, review CSVs and plots
 
 ### **Development**
 The toolkit is under active development, with new features and functionalities being added to further enhance its capabilities.
